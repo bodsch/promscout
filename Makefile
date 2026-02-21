@@ -8,7 +8,7 @@ LDFLAGS=-ldflags "-X 'promscout/pkg/version.Version=$(VERSION)' \
                   -X 'promscout/pkg/version.BuildDate=$(DATE)'"
 
 build:
-	go build $(LDFLAGS) -o bin/$(BINARY) ./cmd/promscout
+	go build $(LDFLAGS) -o $(BINARY) .
 
 clean:
 	rm -rf bin

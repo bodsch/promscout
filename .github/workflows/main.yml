@@ -96,7 +96,6 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           release_tag: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
-          build_flags: ./cmd/promscout
           goos: linux
           goarch: amd64
           goversion: ${{ matrix.go }}
