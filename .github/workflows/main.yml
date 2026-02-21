@@ -1,0 +1,68 @@
+---
+
+name: CI
+
+on:
+  #schedule:
+  #  - cron: "40 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log level'
+        required: true
+        default: 'warning'
+        type: choice
+        options:
+          - info
+          - warning
+          - debug
+  push:
+    branches:
+      - 'main'
+      - 'feature/**'
+      - '!doc/**'
+    paths:
+      - "!Makefile"
+      - "!README.md"
+    tags:
+      - '*.*.*'
+  pull_request:
+    branches:
+      - 'main'
+      - 'feature/**'
+      - '!doc/**'
+    paths:
+      - "!Makefile"
+      - "!README.md"
+
+
+
+jobs:
+  release-linux-amd64:
+    name: "release with go version: ${{ matrix.go }}"
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        release_tag:
+          - 1.0.0
+        go:
+          - 1.23
+
+    steps:
+      - name: 🛎 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: wangyoucao577/go-release-action@v1.52
+        with:
+          github_token: ${{ secrets.GH_REGISTRY_TOKEN }}
+          release_tag: ${{ matrix.release_tag }}
+          goos: linux
+          goarch: amd64
+          goversion: ${{ matrix.go }}
+          binary_name: promscout
+          sha256sum: true
+          overwrite: true
+          extra_files: LICENSE README.md config.example

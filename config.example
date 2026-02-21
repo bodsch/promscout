@@ -1,0 +1,43 @@
+# ------------------------------------------------------------------
+# Prometheus Network Service Discovery Configuration
+# ------------------------------------------------------------------
+
+# CIDR network that will be scanned for Prometheus exporters.
+# Example: 192.168.0.0/24, 10.10.0.0/16
+network_cidr: 192.168.0.0/24
+
+# List of TCP ports that should be scanned.
+# Extend this list for custom exporters.
+ports:
+  - 9100   # node_exporter
+  - 9115   # blackbox_exporter
+  - 9121   # nginx_exporter
+  - 9182   # postgres_exporter
+  - 9130   # unpoller
+
+# Ordered list of paths to check for Prometheus metrics.
+# The first successful match will be used.
+metrics_paths:
+  - /
+  - /metrics
+  - /prometheus
+  - /unpoller
+
+# Interval between discovery cycles.
+# Uses Go duration format.
+interval: 1m
+
+# Timeout for TCP dial and HTTP validation.
+timeout: 3s
+
+# HTTP address where this service exposes the HTTP-SD endpoint.
+listen_address: ":8080"
+
+# Log output format: json or text
+log_format: json
+
+# Log level: debug | info | error
+log_level: info
+
+# Maximum number of parallel scanning workers.
+max_workers: 50
