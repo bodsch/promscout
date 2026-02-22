@@ -1,5 +1,5 @@
 BINARY=promscout
-VERSION?=1.0.0
+VERSION?=1.0.1
 COMMIT=$(shell git rev-parse --short HEAD)
 DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
