@@ -53,7 +53,7 @@ func NewScheduler(
 
 	s.discoveryRunsTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "sd",
+			Namespace: "promscout",
 			Name:      "discovery_runs_total",
 			Help:      "Total number of discovery cycles executed.",
 		},
@@ -61,7 +61,7 @@ func NewScheduler(
 
 	s.discoverySkippedTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "sd",
+			Namespace: "promscout",
 			Name:      "discovery_skipped_total",
 			Help:      "Total number of skipped discovery cycles due to overlap.",
 		},
@@ -69,7 +69,7 @@ func NewScheduler(
 
 	s.discoveryDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "sd",
+			Namespace: "promscout",
 			Name:      "discovery_duration_seconds",
 			Help:      "Duration of discovery cycles.",
 			Buckets:   prometheus.DefBuckets,
@@ -78,7 +78,7 @@ func NewScheduler(
 
 	s.targetsDiscoveredTotal = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "sd",
+			Namespace: "promscout",
 			Name:      "targets_discovered_total",
 			Help:      "Number of open port targets discovered.",
 		},
@@ -86,7 +86,7 @@ func NewScheduler(
 
 	s.targetsValidTotal = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "sd",
+			Namespace: "promscout",
 			Name:      "targets_valid_total",
 			Help:      "Number of valid Prometheus targets.",
 		},
@@ -94,7 +94,7 @@ func NewScheduler(
 
 	s.lastDiscoveryTimestamp = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "sd",
+			Namespace: "promscout",
 			Name:      "last_discovery_timestamp",
 			Help:      "Unix timestamp of the last completed discovery run.",
 		},
@@ -102,7 +102,7 @@ func NewScheduler(
 
 	s.activeDiscovery = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "sd",
+			Namespace: "promscout",
 			Name:      "active_discovery",
 			Help:      "Indicates if a discovery cycle is currently running (1 = yes, 0 = no).",
 		},

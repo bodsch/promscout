@@ -11,9 +11,8 @@ import (
 
 // HTTPExporter implements http.Handler and exposes:
 //
-//   "/"        → HTTP Service Discovery
-//   "/metrics" → PromScout self-monitoring metrics
-//
+//	"/"        → HTTP Service Discovery
+//	"/metrics" → PromScout self-monitoring metrics
 type HTTPExporter struct {
 	scheduler *discovery.Scheduler
 }
@@ -53,7 +52,7 @@ func (h *HTTPExporter) handleServiceDiscovery(w http.ResponseWriter) {
 		response = append(response, map[string]interface{}{
 			"targets": []string{t.Address},
 			"labels": map[string]string{
-				"job":              "dynamic-discovery",
+				"job":              "promscout",
 				"__metrics_path__": t.Path,
 			},
 		})
