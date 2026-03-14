@@ -132,6 +132,12 @@ PromScout exposes internal metrics:
 
 ------------------------------------------------------------------------
 
-## 📜 License
+---
 
-MIT License
+## Author and License
+
+- Bodo Schulz
+
+## License
+
+[Apache](LICENSE)
