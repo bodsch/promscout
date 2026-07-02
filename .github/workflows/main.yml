@@ -47,7 +47,7 @@ jobs:
       fail-fast: false
       matrix:
         go:
-          - "1.23"
+          - "1.25"
     permissions:
       contents: read
 
@@ -70,6 +70,11 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Vulnerability scan (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   release-linux-amd64:
     name: "release linux/amd64 (go ${{ matrix.go }})"
     runs-on: ubuntu-22.04
@@ -80,7 +85,7 @@ jobs:
       fail-fast: false
       matrix:
         go:
-          - "1.23"
+          - "1.25"
 
     permissions:
       contents: write

@@ -51,7 +51,9 @@ func Load(fs *flag.FlagSet, args []string) (Config, error) {
 	}
 
 	if configFile != "" {
-		data, err := os.ReadFile(configFile)
+		// configFile is an operator-supplied path passed via the -config
+		// CLI flag; reading it is the intended behaviour, not attacker input.
+		data, err := os.ReadFile(configFile) // #nosec G304 -- path is a trusted operator-provided CLI flag
 		if err != nil {
 			return cfg, fmt.Errorf("failed to read config file: %w", err)
 		}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"bodsch.me/promscout/internal/config"
 	"bodsch.me/promscout/internal/discovery"
@@ -47,6 +48,14 @@ func main() {
 	server := &http.Server{
 		Addr:    cfg.ListenAddress,
 		Handler: exp,
+
+		// Timeouts protect against slow-client (Slowloris) resource
+		// exhaustion. ReadHeaderTimeout in particular bounds how long a
+		// client may take to send request headers.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {

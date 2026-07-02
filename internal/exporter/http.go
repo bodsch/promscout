@@ -9,18 +9,24 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// TargetProvider supplies the currently discovered scrape targets.
+// *discovery.Scheduler satisfies this interface.
+type TargetProvider interface {
+	Targets() []discovery.Target
+}
+
 // HTTPExporter implements http.Handler and exposes:
 //
 //	"/"        → HTTP Service Discovery
 //	"/metrics" → PromScout self-monitoring metrics
 type HTTPExporter struct {
-	scheduler *discovery.Scheduler
+	provider TargetProvider
 }
 
 // NewHTTPExporter creates a new exporter instance.
-func NewHTTPExporter(scheduler *discovery.Scheduler) *HTTPExporter {
+func NewHTTPExporter(provider TargetProvider) *HTTPExporter {
 	return &HTTPExporter{
-		scheduler: scheduler,
+		provider: provider,
 	}
 }
 
@@ -44,7 +50,7 @@ func (h *HTTPExporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTPExporter) handleServiceDiscovery(w http.ResponseWriter) {
 
-	discovered := h.scheduler.Targets()
+	discovered := h.provider.Targets()
 
 	response := make([]map[string]interface{}, 0, len(discovered))
 

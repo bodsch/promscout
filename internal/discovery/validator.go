@@ -45,13 +45,13 @@ func (v *Validator) Validate(target string) (bool, string) {
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			continue
 		}
 
 		reader := bufio.NewReader(io.LimitReader(resp.Body, 8192))
 		data, err := io.ReadAll(reader)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if err != nil {
 			continue

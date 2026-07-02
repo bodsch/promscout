@@ -51,7 +51,7 @@ func (s *Scanner) Scan() []string {
 			for addr := range jobs {
 				conn, err := net.DialTimeout("tcp", addr, s.cfg.Timeout)
 				if err == nil {
-					conn.Close()
+					_ = conn.Close()
 
 					s.logger.Debug("open port discovered",
 						"target", addr,
