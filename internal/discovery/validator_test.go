@@ -1,8 +1,10 @@
 package discovery
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +46,69 @@ func newTestValidator(paths []string) *Validator {
 	return NewValidator(2*time.Second, paths, logging.New("text", "error"))
 }
 
+func TestAnalyzeExpositionServiceDerivation(t *testing.T) {
+	tests := []struct {
+		name         string
+		body         string
+		wantValid    bool
+		wantExporter string
+		wantVersion  string
+		wantSource   string
+	}{
+		{
+			name:         "target_info wins",
+			body:         "# HELP x y\ntarget_info{service_name=\"checkout\",service_namespace=\"shop\"} 1\nnode_cpu 1\n",
+			wantValid:    true,
+			wantExporter: "checkout",
+			wantSource:   "target_info",
+		},
+		{
+			name:         "build_info name and version",
+			body:         "node_exporter_build_info{branch=\"HEAD\",version=\"1.7.0\",goversion=\"go1.21\"} 1\nnode_cpu 1\n",
+			wantValid:    true,
+			wantExporter: "node_exporter",
+			wantVersion:  "1.7.0",
+			wantSource:   "build_info",
+		},
+		{
+			name:         "dominant prefix fallback ignores runtime metrics",
+			body:         "go_goroutines 5\nprocess_cpu 1\npg_up 1\npg_stat_activity 3\npg_locks 2\n",
+			wantValid:    true,
+			wantExporter: "pg",
+			wantSource:   "prefix",
+		},
+		{
+			name:       "valid but unidentifiable leaves metadata empty",
+			body:       "# HELP x y\n# TYPE x gauge\n",
+			wantValid:  true,
+			wantSource: "",
+		},
+		{
+			name:      "html is rejected",
+			body:      "<html><body>nope</body></html>",
+			wantValid: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok, meta := analyzeExposition(strings.NewReader(tt.body))
+			if ok != tt.wantValid {
+				t.Fatalf("valid = %v, want %v", ok, tt.wantValid)
+			}
+			if meta.exporter != tt.wantExporter {
+				t.Errorf("exporter = %q, want %q", meta.exporter, tt.wantExporter)
+			}
+			if meta.version != tt.wantVersion {
+				t.Errorf("version = %q, want %q", meta.version, tt.wantVersion)
+			}
+			if meta.source != tt.wantSource {
+				t.Errorf("source = %q, want %q", meta.source, tt.wantSource)
+			}
+		})
+	}
+}
+
 func TestValidate(t *testing.T) {
 	const promBody = "# HELP go_info x\n# TYPE go_info gauge\ngo_info 1\n"
 
@@ -58,9 +123,9 @@ func TestValidate(t *testing.T) {
 		defer ts.Close()
 
 		v := newTestValidator([]string{"/", "/metrics"})
-		ok, path := v.Validate(ts.Listener.Addr().String())
-		if !ok || path != "/metrics" {
-			t.Fatalf("Validate() = (%v, %q), want (true, \"/metrics\")", ok, path)
+		ok, res := v.Validate(context.Background(), ts.Listener.Addr().String())
+		if !ok || res.Path != "/metrics" {
+			t.Fatalf("Validate() = (%v, %q), want (true, \"/metrics\")", ok, res.Path)
 		}
 	})
 
@@ -78,9 +143,9 @@ func TestValidate(t *testing.T) {
 		defer ts.Close()
 
 		v := newTestValidator([]string{"/", "/metrics"})
-		ok, path := v.Validate(ts.Listener.Addr().String())
-		if !ok || path != "/metrics" {
-			t.Fatalf("Validate() = (%v, %q), want (true, \"/metrics\")", ok, path)
+		ok, res := v.Validate(context.Background(), ts.Listener.Addr().String())
+		if !ok || res.Path != "/metrics" {
+			t.Fatalf("Validate() = (%v, %q), want (true, \"/metrics\")", ok, res.Path)
 		}
 	})
 
@@ -91,9 +156,9 @@ func TestValidate(t *testing.T) {
 		defer ts.Close()
 
 		v := newTestValidator([]string{"/metrics"})
-		ok, path := v.Validate(ts.Listener.Addr().String())
-		if ok || path != "" {
-			t.Fatalf("Validate() = (%v, %q), want (false, \"\")", ok, path)
+		ok, res := v.Validate(context.Background(), ts.Listener.Addr().String())
+		if ok || res.Path != "" {
+			t.Fatalf("Validate() = (%v, %q), want (false, \"\")", ok, res.Path)
 		}
 	})
 
@@ -104,9 +169,56 @@ func TestValidate(t *testing.T) {
 		defer ts.Close()
 
 		v := newTestValidator([]string{"/", "/metrics"})
-		ok, _ := v.Validate(ts.Listener.Addr().String())
+		ok, _ := v.Validate(context.Background(), ts.Listener.Addr().String())
 		if ok {
 			t.Fatalf("Validate() = true, want false for HTML body")
+		}
+	})
+
+	t.Run("valid metric beyond the old 8KiB read limit", func(t *testing.T) {
+		// A long comment preamble (no HELP/TYPE) pushes the first real
+		// metric line well past 8 KiB. The previous fixed-size read
+		// truncated it and produced a false negative.
+		var sb strings.Builder
+		for sb.Len() < 16*1024 {
+			sb.WriteString("# padding comment line without help or type markers\n")
+		}
+		sb.WriteString("go_info 1\n")
+		body := sb.String()
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/metrics" {
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer ts.Close()
+
+		v := newTestValidator([]string{"/metrics"})
+		ok, res := v.Validate(context.Background(), ts.Listener.Addr().String())
+		if !ok || res.Path != "/metrics" {
+			t.Fatalf("Validate() = (%v, %q), want (true, \"/metrics\")", ok, res.Path)
+		}
+	})
+
+	t.Run("large HTML body is still rejected", func(t *testing.T) {
+		// Ensure the streaming detector rejects HTML even when large.
+		var sb strings.Builder
+		sb.WriteString("<html>\n")
+		for sb.Len() < 32*1024 {
+			sb.WriteString("<div>filler content</div>\n")
+		}
+		body := sb.String()
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		defer ts.Close()
+
+		v := newTestValidator([]string{"/"})
+		if ok, _ := v.Validate(context.Background(), ts.Listener.Addr().String()); ok {
+			t.Fatal("Validate() = true, want false for large HTML body")
 		}
 	})
 
@@ -118,7 +230,7 @@ func TestValidate(t *testing.T) {
 		ts.Close()
 
 		v := newTestValidator([]string{"/metrics"})
-		ok, _ := v.Validate(addr)
+		ok, _ := v.Validate(context.Background(), addr)
 		if ok {
 			t.Fatalf("Validate() = true, want false for unreachable target")
 		}

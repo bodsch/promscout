@@ -19,8 +19,20 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.NetworkCIDR != "192.168.1.0/24" {
 		t.Errorf("NetworkCIDR = %q, want default", cfg.NetworkCIDR)
 	}
-	if cfg.MaxWorkers != 50 {
-		t.Errorf("MaxWorkers = %d, want 50", cfg.MaxWorkers)
+	if cfg.MaxWorkers != 512 {
+		t.Errorf("MaxWorkers = %d, want 512", cfg.MaxWorkers)
+	}
+	if cfg.ValidateWorkers != 50 {
+		t.Errorf("ValidateWorkers = %d, want 50", cfg.ValidateWorkers)
+	}
+	if cfg.DialTimeout != 800*time.Millisecond {
+		t.Errorf("DialTimeout = %v, want 800ms", cfg.DialTimeout)
+	}
+	if cfg.CacheFile != "" {
+		t.Errorf("CacheFile = %q, want empty default", cfg.CacheFile)
+	}
+	if cfg.GuessJob {
+		t.Errorf("GuessJob = %v, want false default", cfg.GuessJob)
 	}
 	if cfg.ListenAddress != ":8080" {
 		t.Errorf("ListenAddress = %q, want :8080", cfg.ListenAddress)
@@ -70,7 +82,10 @@ metrics_paths:
   - /custom
 interval: 30s
 timeout: 2s
+dial_timeout: 500ms
 max_workers: 25
+validate_workers: 8
+cache_file: /var/lib/promscout/targets.json
 `
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write temp config: %v", err)
@@ -94,9 +109,119 @@ max_workers: 25
 	if cfg.MaxWorkers != 25 {
 		t.Errorf("MaxWorkers = %d, want 25", cfg.MaxWorkers)
 	}
+	if cfg.ValidateWorkers != 8 {
+		t.Errorf("ValidateWorkers = %d, want 8", cfg.ValidateWorkers)
+	}
+	if cfg.DialTimeout != 500*time.Millisecond {
+		t.Errorf("DialTimeout = %v, want 500ms", cfg.DialTimeout)
+	}
+	if cfg.CacheFile != "/var/lib/promscout/targets.json" {
+		t.Errorf("CacheFile = %q, want /var/lib/promscout/targets.json", cfg.CacheFile)
+	}
 	// Not specified in YAML → default retained.
 	if cfg.ListenAddress != ":8080" {
 		t.Errorf("ListenAddress = %q, want default :8080", cfg.ListenAddress)
+	}
+}
+
+func TestLoadCLIFlagsOverrideYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	yaml := `
+network_cidr: 192.168.0.0/24
+interval: 30s
+max_workers: 25
+log_level: info
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	cfg, err := Load(fs, []string{
+		"-config", path,
+		"-cidr", "10.0.0.0/8",
+		"-workers", "5",
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// Explicitly-set CLI flags must win over the YAML file.
+	if cfg.NetworkCIDR != "10.0.0.0/8" {
+		t.Errorf("NetworkCIDR = %q, want CLI override 10.0.0.0/8", cfg.NetworkCIDR)
+	}
+	if cfg.MaxWorkers != 5 {
+		t.Errorf("MaxWorkers = %d, want CLI override 5", cfg.MaxWorkers)
+	}
+	// Values only present in YAML (no CLI flag) must be taken from YAML.
+	if cfg.Interval != 30*time.Second {
+		t.Errorf("Interval = %v, want YAML 30s", cfg.Interval)
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, want YAML info", cfg.LogLevel)
+	}
+}
+
+func TestLoadYAMLOverridesDefaultsWithoutCLI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// max_workers absent → default must survive; cidr present → YAML wins.
+	yaml := `
+network_cidr: 172.16.0.0/12
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	cfg, err := Load(fs, []string{"-config", path})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.NetworkCIDR != "172.16.0.0/12" {
+		t.Errorf("NetworkCIDR = %q, want YAML 172.16.0.0/12", cfg.NetworkCIDR)
+	}
+	if cfg.MaxWorkers != 512 {
+		t.Errorf("MaxWorkers = %d, want default 512", cfg.MaxWorkers)
+	}
+}
+
+func TestLoadGuessJobEnabledViaYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("guess_job: true\n"), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	cfg, err := Load(fs, []string{"-config", path})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.GuessJob {
+		t.Error("GuessJob = false, want true (enabled via YAML)")
+	}
+}
+
+func TestLoadGuessJobCLIDisablesYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("guess_job: true\n"), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	// Explicit CLI flag must override the YAML value.
+	cfg, err := Load(fs, []string{"-config", path, "-guess-job=false"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.GuessJob {
+		t.Error("GuessJob = true, want false (disabled via CLI over YAML)")
 	}
 }
 

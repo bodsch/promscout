@@ -67,14 +67,26 @@ metrics_paths:
 
 interval: 30s
 timeout: 3s
+dial_timeout: 800ms
 
 listen_address: ":8080"
 
 log_format: json
 log_level: info
 
-max_workers: 50
+max_workers: 512
+validate_workers: 50
+
+cache_file: ""
 ```
+
+`dial_timeout` bounds the TCP port probe and is the dominant factor for
+scan runtime on large networks; keep it short. `max_workers` sizes the
+parallel dial stage, `validate_workers` the parallel HTTP validation
+stage — both stages run as a streaming pipeline, so validation starts as
+soon as the first open port is found. `cache_file`, when set, persists
+validated targets after every cycle and reloads them on startup for a
+warm start.
 
 ------------------------------------------------------------------------
 
@@ -88,10 +100,12 @@ CLI flags override YAML configuration.
 
 ## 🌐 Endpoints
 
-  Endpoint     Description
-  ------------ -----------------------------------
-  `/`          Prometheus HTTP Service Discovery
-  `/metrics`   PromScout self-monitoring metrics
+  Endpoint       Description
+  -------------- ---------------------------------------------------
+  `/`            Prometheus HTTP Service Discovery
+  `/metrics`     PromScout self-monitoring metrics
+  `/-/healthy`   Liveness probe (200 while the server is serving)
+  `/-/ready`     Readiness probe (200 once the first scan completed, otherwise 503)
 
 ------------------------------------------------------------------------
 
@@ -106,19 +120,53 @@ scrape_configs:
       - url: "http://promscout:8080/"
 ```
 
+### Service identity and the `job` label
+
+For every target PromScout derives the exposed service identity from the
+metrics themselves and attaches it as meta labels:
+
+  Label                          Meaning
+  ------------------------------ ------------------------------------------
+  `__meta_promscout_exporter`    Derived exporter/service name
+  `__meta_promscout_version`     Build version (from `*_build_info`), if any
+  `__meta_promscout_source`      How it was derived: `target_info`, `build_info` or `prefix`
+
+Derivation order (most to least authoritative):
+
+1.  `target_info{service_name="…"}` — OpenTelemetry resource identity
+2.  `<name>_build_info{version="…"}` — classic exporter build metric
+3.  the dominant metric namespace prefix (ignoring `go_`/`process_`/…)
+
+The `job` label defaults to `promscout`. Following Prometheus conventions,
+map the meta label to `job` yourself via relabeling:
+
+``` yaml
+scrape_configs:
+  - job_name: "dynamic"
+    http_sd_configs:
+      - url: "http://promscout:8080/"
+    relabel_configs:
+      - source_labels: [__meta_promscout_exporter]
+        target_label: job
+```
+
+Alternatively, enable `guess_job` (CLI `--guess-job`) to let PromScout use
+the derived exporter name as the `job` label directly — a best-effort
+convenience for setups that do not relabel.
+
 ------------------------------------------------------------------------
 
 ## 📊 Self Monitoring Metrics
 
 PromScout exposes internal metrics:
 
--   sd_discovery_runs_total
--   sd_discovery_skipped_total
--   sd_discovery_duration_seconds
--   sd_targets_discovered_total
--   sd_targets_valid_total
--   sd_last_discovery_timestamp
--   sd_active_discovery
+-   promscout_discovery_runs_total
+-   promscout_discovery_skipped_total
+-   promscout_discovery_duration_seconds
+-   promscout_targets_discovered_total
+-   promscout_targets_valid_total
+-   promscout_last_discovery_timestamp
+-   promscout_active_discovery
 
 ------------------------------------------------------------------------
 

@@ -1,17 +1,26 @@
-BINARY=promscout
-VERSION?=1.1.0
-COMMIT=$(shell git rev-parse --short HEAD)
-DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+BINARY  := promscout
+BIN_DIR := bin
+MODULE  := bodsch.me/promscout
 
-LDFLAGS=-ldflags "-X 'promscout/pkg/version.Version=$(VERSION)' \
-                  -X 'promscout/pkg/version.GitCommit=$(COMMIT)' \
-                  -X 'promscout/pkg/version.BuildDate=$(DATE)'"
+VERSION ?= 2.0.0
+COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE    := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+LDFLAGS := -ldflags "-X '$(MODULE)/pkg/version.Version=$(VERSION)' \
+                     -X '$(MODULE)/pkg/version.GitCommit=$(COMMIT)' \
+                     -X '$(MODULE)/pkg/version.BuildDate=$(DATE)'"
+
+# OS/ARCH combinations produced by the `release` target:
+# Linux x86_64, Linux ARM64 and macOS ARM64 (Apple Silicon).
+PLATFORMS := linux/amd64 linux/arm64 darwin/arm64
+
+.PHONY: build test fmt vet tidy release clean
 
 build:
-	go build $(LDFLAGS) -o $(BINARY) .
+	go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY) .
 
-clean:
-	rm -rf bin
+test:
+	go test ./...
 
 fmt:
 	go fmt ./...
@@ -19,5 +28,17 @@ fmt:
 vet:
 	go vet ./...
 
-test:
-	go test ./...
+tidy:
+	go mod tidy
+
+release: clean
+	@for platform in $(PLATFORMS); do \
+		os=$${platform%/*}; arch=$${platform#*/}; \
+		out=$(BIN_DIR)/$(BINARY)-$${os}-$${arch}; \
+		echo "building $${out}"; \
+		GOOS=$${os} GOARCH=$${arch} CGO_ENABLED=0 \
+			go build $(LDFLAGS) -o $${out} . || exit 1; \
+	done
+
+clean:
+	rm -rf $(BIN_DIR)

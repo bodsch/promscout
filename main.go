@@ -15,6 +15,9 @@ import (
 	"bodsch.me/promscout/internal/exporter"
 	"bodsch.me/promscout/internal/logging"
 	"bodsch.me/promscout/pkg/version"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 func main() {
@@ -36,11 +39,28 @@ func main() {
 
 	logger := logging.New(cfg.LogFormat, cfg.LogLevel)
 
+	// Use a dedicated registry instead of the global default so the
+	// metrics wiring is self-contained. Go runtime and process metrics
+	// are registered explicitly to preserve the previous /metrics output.
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+
 	scanner := discovery.NewScanner(cfg, logger)
 	validator := discovery.NewValidator(cfg.Timeout, cfg.MetricsPaths, logger)
-	scheduler := discovery.NewScheduler(scanner, validator, cfg.Interval, logger)
+	scheduler := discovery.NewScheduler(
+		scanner,
+		validator,
+		cfg.Interval,
+		cfg.ValidateWorkers,
+		cfg.CacheFile,
+		registry,
+		logger,
+	)
 
-	exp := exporter.NewHTTPExporter(scheduler)
+	exp := exporter.NewHTTPExporter(scheduler, registry, cfg.GuessJob)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -61,7 +81,15 @@ func main() {
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down http server")
-		_ = server.Shutdown(context.Background())
+
+		// Bound the graceful shutdown so a stuck connection cannot block
+		// process termination indefinitely.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("graceful shutdown failed", "error", err)
+		}
 	}()
 
 	go scheduler.Start(ctx)

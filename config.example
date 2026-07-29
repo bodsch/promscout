@@ -27,8 +27,14 @@ metrics_paths:
 # Uses Go duration format.
 interval: 1m
 
-# Timeout for TCP dial and HTTP validation.
+# Timeout for the HTTP metrics validation request.
 timeout: 3s
+
+# Timeout for the TCP port probe (dial). Keep this short: open ports
+# answer almost instantly, while filtered ports (firewall DROP) block
+# for the full duration. This value dominates the scan runtime on large
+# networks, so it is tuned independently from the HTTP timeout above.
+dial_timeout: 800ms
 
 # HTTP address where this service exposes the HTTP-SD endpoint.
 listen_address: ":8080"
@@ -37,7 +43,28 @@ listen_address: ":8080"
 log_format: json
 
 # Log level: debug | info | error
-log_level: info
+log_level: debug
 
-# Maximum number of parallel scanning workers.
-max_workers: 50
+# Maximum number of parallel TCP scan workers (dial stage).
+max_workers: 512
+
+# Maximum number of parallel HTTP validation workers (validate stage).
+validate_workers: 50
+
+# Optional path to a target cache file. When set, validated targets are
+# persisted after every discovery cycle and reloaded on startup, so the
+# HTTP-SD endpoint serves results immediately (warm start) instead of
+# staying empty until the first scan completes. Leave empty to disable.
+cache_file: "/tmp/promscout-cache.json"
+
+# Best-effort "job" label guessing (opt-in, default false).
+#
+# The service identity of each target is always derived from its exposed
+# metrics and published as __meta_promscout_{exporter,version,source}
+# labels for use in Prometheus relabel_configs. When guess_job is true,
+# the derived exporter name is additionally used as the "job" label; when
+# false, "job" stays at the neutral default "promscout".
+#
+# Derivation order: target_info.service_name (OpenTelemetry) >
+# <name>_build_info > dominant metric namespace prefix.
+guess_job: false
