@@ -55,7 +55,13 @@ func TestSaveTargetsEmptySlice(t *testing.T) {
 	}
 }
 
-func TestSaveTargetsOverwritesAtomically(t *testing.T) {
+// TestSaveTargetsOverwrites covers the successful overwrite and the absence of
+// stray temp files. It does not cover atomicity, despite what its name used to
+// claim: nothing here interrupts a write or reads concurrently with one. That
+// half is in promises_test.go —
+// TestSaveTargetsLeavesTheOldFileIntactOnFailure and
+// TestSaveTargetsIsSafeForAConcurrentReader.
+func TestSaveTargetsOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "targets.json")
 

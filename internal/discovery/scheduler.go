@@ -207,6 +207,11 @@ func (s *Scheduler) execute(ctx context.Context) {
 // the validated targets and (optionally) persists them.
 func (s *Scheduler) run(ctx context.Context) {
 	s.activeDiscovery.Set(1)
+	// In a defer, so the gauge returns to zero on the cancelled path below as
+	// well — a dashboard stuck at "discovery running" outlives the process that
+	// set it.
+	defer s.activeDiscovery.Set(0)
+
 	start := time.Now()
 
 	s.logger.Debug("starting discovery cycle")
@@ -247,6 +252,25 @@ func (s *Scheduler) run(ctx context.Context) {
 	}
 	wg.Wait()
 
+	// A cycle the context ended did not finish scanning: the scanner closes its
+	// channel on cancellation, so the workers simply run out of work and the
+	// result below is empty or partial. It is not a measurement of anything, and
+	// publishing it does real damage — s.targets is replaced, the HTTP-SD
+	// endpoint starts answering with an empty array, and persist writes that
+	// emptiness over the warm-start cache. The next start then has nothing to
+	// seed from, which is precisely what the cache exists to prevent.
+	//
+	// Since a shutdown cancels the context while a cycle is very likely still
+	// running — a /24 across several ports takes minutes — this was the normal
+	// case, not an edge one.
+	if ctx.Err() != nil {
+		s.logger.Debug("discovery cycle cancelled, keeping the previous targets",
+			"discovered_targets", discovered.Load(),
+			"elapsed", time.Since(start),
+		)
+		return
+	}
+
 	// Stable ordering keeps the HTTP-SD output and persisted cache
 	// deterministic regardless of validation completion order.
 	sort.Slice(valid, func(i, j int) bool {
@@ -265,7 +289,6 @@ func (s *Scheduler) run(ctx context.Context) {
 	s.targetsValidTotal.Set(float64(len(valid)))
 	s.lastDiscoveryTimestamp.Set(float64(time.Now().Unix()))
 	s.discoveryDuration.Observe(time.Since(start).Seconds())
-	s.activeDiscovery.Set(0)
 
 	// The service is ready to serve service-discovery results once the
 	// first cycle has fully completed.

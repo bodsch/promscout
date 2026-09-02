@@ -32,10 +32,11 @@ func loadTargets(path string) ([]Target, error) {
 
 // saveTargets atomically persists targets to path.
 //
-// The data is first written to a temporary file in the same directory
-// and then renamed onto path. This guarantees a reader never observes a
-// partially written file, and that a crash mid-write cannot corrupt an
-// existing cache.
+// The data is first written to a temporary file in the same directory,
+// flushed to disk, and then renamed onto path. This guarantees a reader
+// never observes a partially written file, and that a crash mid-write —
+// of the process or of the machine — cannot corrupt an existing cache:
+// the rename either happened or it did not.
 //
 // Parameters:
 //   - path: the destination cache file.
@@ -66,6 +67,15 @@ func saveTargets(path string, targets []Target) error {
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("chmod temp cache file: %w", err)
+	}
+	// Without this the guarantee above only covers a crashing process, not a
+	// crashing machine: Write leaves the bytes in the page cache, and the rename
+	// is a metadata operation the filesystem may commit first. A power loss in
+	// that window replaces a good cache with an empty or truncated one — the old
+	// contents are gone and the new ones never arrived.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp cache file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp cache file: %w", err)

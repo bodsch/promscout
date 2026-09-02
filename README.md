@@ -178,6 +178,18 @@ PromScout exposes internal metrics:
 -   Context-aware shutdown
 -   Production-ready logging
 
+### Warm start and cancelled cycles
+
+A cycle interrupted by shutdown does **not** publish its result. The scanner
+closes its channel on cancellation, so an interrupted cycle ends with an empty
+or partial target set — which says nothing about what is out there. Publishing
+it would replace the live targets, answer the HTTP-SD endpoint with an empty
+array, and write that emptiness over the warm-start cache, leaving the next
+start with nothing to seed from.
+
+A cycle that ran to completion and found nothing does publish that, so a
+decommissioned exporter leaves the target list.
+
 ------------------------------------------------------------------------
 
 ---
