@@ -31,9 +31,11 @@ const (
 // reServiceName extracts the OpenTelemetry service_name label value.
 // reVersion extracts a version label value, anchored to a label boundary
 // ({ or ,) so it does not accidentally match e.g. goversion="...".
+// reMetricName matches a legal (non-quoted) Prometheus metric name.
 var (
 	reServiceName = regexp.MustCompile(`service_name="((?:[^"\\]|\\.)*)"`)
 	reVersion     = regexp.MustCompile(`[{,]version="((?:[^"\\]|\\.)*)"`)
+	reMetricName  = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
 )
 
 // ignoredPrefixes are metric namespaces present on virtually every Go
@@ -68,13 +70,36 @@ type Validator struct {
 }
 
 // NewValidator creates a new metrics validator.
+//
+// The HTTP client deliberately deviates from the net/http defaults, because
+// every probe goes to a host that merely had an open port:
+//
+//   - no proxy: the scanner dials directly, so the validator must too, or
+//     HTTP_PROXY would answer for the scanned host;
+//   - no redirects: a scanned host must not be able to send the probe to
+//     another host and have that body accepted as its own. A 3xx is not 2xx,
+//     so the next configured path is tried instead.
+//
+// Parameters:
+//   - timeout: per-request timeout, covering connect, headers and body.
+//   - paths: metrics paths probed in order; each must start with "/".
+//   - logger: structured logger.
+//
+// Returns a Validator ready for concurrent use.
 func NewValidator(timeout time.Duration, paths []string, logger *logging.Logger) *Validator {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+
 	return &Validator{
 		timeout:      timeout,
 		metricsPaths: paths,
 		logger:       logger,
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}
 }
@@ -236,15 +261,8 @@ func analyzeExposition(r io.Reader) (bool, expositionMeta) {
 			break
 		}
 
-		// Otherwise apply the strict metric-line check.
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		if strings.ContainsAny(fields[0], "<>") {
-			continue
-		}
-		if _, err := strconv.ParseFloat(fields[1], 64); err != nil {
+		// Otherwise apply the strict sample-line check.
+		if !isSampleLine(line, name) {
 			continue
 		}
 
@@ -283,6 +301,74 @@ func metricNameFromLine(line string) string {
 		return line[:i]
 	}
 	return line
+}
+
+// isSampleLine reports whether line is a well-formed exposition sample:
+//
+//	name[{labels}] value [timestamp] [# exemplar]
+//
+// Checking the whole shape, not just "second field is a number", is what
+// keeps plain-text status pages out: nginx stub_status has purely numeric
+// lines ("16630948 16630948 31070465") and lines like
+// "Reading: 6 Writing: 179 Waiting: 106", whose first two fields alone
+// would pass.
+//
+// Parameters:
+//   - line: the trimmed, non-comment line.
+//   - name: the metric name as returned by metricNameFromLine.
+//
+// Returns true only for a legal metric name followed by a float value and
+// at most a numeric timestamp.
+func isSampleLine(line, name string) bool {
+	if !reMetricName.MatchString(name) {
+		return false
+	}
+
+	rest := line[len(name):]
+	if strings.HasPrefix(rest, "{") {
+		end := labelSetEnd(rest)
+		if end < 0 {
+			return false
+		}
+		rest = rest[end+1:]
+	}
+
+	// OpenMetrics exemplars follow the sample after " # ".
+	if i := strings.Index(rest, " # "); i >= 0 {
+		rest = rest[:i]
+	}
+
+	fields := strings.Fields(rest)
+	if len(fields) < 1 || len(fields) > 2 {
+		return false
+	}
+	if _, err := strconv.ParseFloat(fields[0], 64); err != nil {
+		return false
+	}
+	if len(fields) == 2 {
+		if _, err := strconv.ParseFloat(fields[1], 64); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// labelSetEnd returns the index of the '}' closing the label set that s
+// starts with, honouring quoted label values (which may contain '}', spaces
+// and escaped quotes). It returns -1 if the label set is not closed.
+func labelSetEnd(s string) int {
+	inQuotes := false
+	for i := 1; i < len(s); i++ {
+		switch c := s[i]; {
+		case inQuotes && c == '\\':
+			i++ // skip the escaped character
+		case c == '"':
+			inQuotes = !inQuotes
+		case !inQuotes && c == '}':
+			return i
+		}
+	}
+	return -1
 }
 
 // metricPrefix returns the namespace prefix of a metric name: the segment

@@ -1,12 +1,15 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 type Config struct {
@@ -106,7 +109,78 @@ func Load(fs *flag.FlagSet, args []string) (Config, error) {
 	// Layer 3: explicitly-set CLI flags win over everything else.
 	applyFlagOverrides(fs, &cfg, flagCfg)
 
+	if err := cfg.Validate(); err != nil {
+		return defaults, err
+	}
+
 	return cfg, nil
+}
+
+// Validate reports every setting the service cannot run with.
+//
+// Without it, invalid values surfaced late and badly: a non-positive interval
+// panicked in time.NewTicker, a non-positive timeout disabled the HTTP timeout
+// entirely, and an unparsable CIDR made every discovery cycle "complete" with
+// no targets — overwriting the warm-start cache with an empty set.
+//
+// Returns nil if the configuration is usable, otherwise an error joining one
+// message per invalid setting, each naming the YAML key.
+func (c Config) Validate() error {
+	var errs []error
+
+	if _, _, err := net.ParseCIDR(c.NetworkCIDR); err != nil {
+		errs = append(errs, fmt.Errorf("network_cidr %q: %w", c.NetworkCIDR, err))
+	}
+	if len(c.Ports) == 0 {
+		errs = append(errs, errors.New("ports: at least one port is required"))
+	}
+	for _, p := range c.Ports {
+		if p < 1 || p > 65535 {
+			errs = append(errs, fmt.Errorf("ports: port %d is outside 1-65535", p))
+		}
+	}
+	if len(c.MetricsPaths) == 0 {
+		errs = append(errs, errors.New("metrics_paths: at least one path is required"))
+	}
+	for _, p := range c.MetricsPaths {
+		// The path is appended to "http://host:port"; anything not starting
+		// with "/" would change the host part of the URL.
+		if !strings.HasPrefix(p, "/") {
+			errs = append(errs, fmt.Errorf("metrics_paths: metrics path %q must start with \"/\"", p))
+		}
+	}
+	if c.Interval <= 0 {
+		errs = append(errs, fmt.Errorf("interval %s: must be greater than zero", c.Interval))
+	}
+	if c.Timeout <= 0 {
+		errs = append(errs, fmt.Errorf("timeout %s: must be greater than zero", c.Timeout))
+	}
+	// Zero is allowed: the scanner then falls back to timeout.
+	if c.DialTimeout < 0 {
+		errs = append(errs, fmt.Errorf("dial_timeout %s: must not be negative", c.DialTimeout))
+	}
+	if c.ListenAddress == "" {
+		errs = append(errs, errors.New("listen_address: must not be empty"))
+	}
+	if c.LogFormat != "json" && c.LogFormat != "text" {
+		errs = append(errs, fmt.Errorf("log_format %q: must be json or text", c.LogFormat))
+	}
+	switch strings.ToLower(c.LogLevel) {
+	case "debug", "info", "error":
+	default:
+		errs = append(errs, fmt.Errorf("log_level %q: must be debug, info or error", c.LogLevel))
+	}
+	if c.MaxWorkers < 1 {
+		errs = append(errs, fmt.Errorf("max_workers %d: must be at least 1", c.MaxWorkers))
+	}
+	if c.ValidateWorkers < 1 {
+		errs = append(errs, fmt.Errorf("validate_workers %d: must be at least 1", c.ValidateWorkers))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("invalid configuration: %w", errors.Join(errs...))
+	}
+	return nil
 }
 
 // applyFlagOverrides copies the value of every flag the user explicitly

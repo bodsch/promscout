@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +16,7 @@ import (
 	"bodsch.me/promscout/internal/discovery"
 	"bodsch.me/promscout/internal/exporter"
 	"bodsch.me/promscout/internal/logging"
+	"bodsch.me/promscout/internal/monitoring"
 	"bodsch.me/promscout/pkg/version"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -47,6 +50,10 @@ func main() {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
+	if err := monitoring.RegisterBuildInfo(registry); err != nil {
+		logger.Error("registering build info failed", "error", err)
+		os.Exit(1)
+	}
 
 	scanner := discovery.NewScanner(cfg, logger)
 	validator := discovery.NewValidator(cfg.Timeout, cfg.MetricsPaths, logger)
@@ -78,19 +85,11 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	go func() {
-		<-ctx.Done()
-		logger.Info("shutting down http server")
-
-		// Bound the graceful shutdown so a stuck connection cannot block
-		// process termination indefinitely.
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Error("graceful shutdown failed", "error", err)
-		}
-	}()
+	ln, err := net.Listen("tcp", cfg.ListenAddress)
+	if err != nil {
+		logger.Error("http server error", "error", err)
+		os.Exit(1)
+	}
 
 	go scheduler.Start(ctx)
 
@@ -99,10 +98,53 @@ func main() {
 		"interval", cfg.Interval,
 	)
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := serve(ctx, server, ln, shutdownGrace, logger); err != nil {
 		logger.Error("http server error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// shutdownGrace bounds the graceful shutdown so a stuck connection cannot
+// block process termination indefinitely.
+const shutdownGrace = 10 * time.Second
+
+// serve runs server on ln until ctx is cancelled, then shuts it down
+// gracefully and returns only once in-flight requests have finished.
+//
+// Waiting matters: Shutdown makes Serve return immediately, so a caller that
+// exits when Serve returns cuts off every request still being answered.
+//
+// Parameters:
+//   - ctx: cancelled on SIGINT/SIGTERM to start the shutdown.
+//   - server: the configured HTTP server.
+//   - ln: the listener to serve on; serve takes ownership of it.
+//   - grace: upper bound for draining in-flight requests.
+//   - logger: structured logger.
+//
+// Returns nil after a clean shutdown, the Serve error if serving failed, or a
+// wrapped context.DeadlineExceeded if requests outlived the grace period.
+func serve(ctx context.Context, server *http.Server, ln net.Listener, grace time.Duration, logger *logging.Logger) error {
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(ln) }()
+
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+	}
+
+	logger.Info("shutting down http server")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func printVersion() {

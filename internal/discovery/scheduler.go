@@ -14,6 +14,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// discoveryDurationBuckets are the upper bounds of the cycle-duration
+// histogram: 0.5 s doubling up to 1024 s.
+var discoveryDurationBuckets = prometheus.ExponentialBuckets(0.5, 2, 12)
+
+// Scheduler runs discovery cycles periodically, publishes their results and
+// exposes self-monitoring metrics about them.
 type Scheduler struct {
 	scanner         *Scanner
 	validator       *Validator
@@ -117,7 +123,10 @@ func NewScheduler(
 			Namespace: "promscout",
 			Name:      "discovery_duration_seconds",
 			Help:      "Duration of discovery cycles.",
-			Buckets:   prometheus.DefBuckets,
+			// 0.5 s .. ~17 min. DefBuckets end at 10 s, while a /24 across
+			// several ports takes minutes: every cycle landed in +Inf and
+			// histogram_quantile reported a flat, wrong "10 s".
+			Buckets: discoveryDurationBuckets,
 		},
 	)
 
