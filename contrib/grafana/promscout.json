@@ -30,6 +30,21 @@
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
+      },
+      {
+        "name": "Target changes",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "purple",
+        "step": "1m",
+        "expr": "sum by (instance, change) (increase(promscout_target_changes_total{instance=~\"$instance\"}[2m])) > 0",
+        "titleFormat": "target {{change}}",
+        "textFormat": "{{instance}}",
+        "useValueForTime": false
       }
     ]
   },
@@ -926,15 +941,196 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Target changes",
+      "description": "Targets added to, removed from, or changed in (path, exporter, version) the published set, compared with the previous completed cycle — or with the warm-start cache after a restart. The first cycle without a cache is the initial set and is not counted. Which host changed is in the log: msg=\"target added\" / \"target removed\" / \"target changed\", field `target`. A target that is removed and added again repeatedly is flapping: usually an exporter slower than `timeout`.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (change) (increase(promscout_target_changes_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{change}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "added"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "removed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "changed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 15,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 18,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Last target change",
+      "description": "Time since the target set last changed on any instance. Informational, not an alert: a stable network legitimately goes weeks without a change.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "time() - max(promscout_last_target_change_timestamp{instance=~\"$instance\"} > 0)",
+          "legendFormat": "__auto",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "none since start",
+                  "color": "blue"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      },
+      "id": 16,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 18,
+        "y": 21
+      }
+    },
+    {
       "type": "row",
       "title": "Process and runtime",
-      "id": 15,
+      "id": 17,
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 28
       },
       "panels": []
     },
@@ -989,7 +1185,7 @@
           "sort": "desc"
         }
       },
-      "id": 16,
+      "id": 18,
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -998,7 +1194,7 @@
         "h": 7,
         "w": 6,
         "x": 0,
-        "y": 22
+        "y": 29
       }
     },
     {
@@ -1061,7 +1257,7 @@
           "sort": "desc"
         }
       },
-      "id": 17,
+      "id": 19,
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -1070,7 +1266,7 @@
         "h": 7,
         "w": 6,
         "x": 6,
-        "y": 22
+        "y": 29
       }
     },
     {
@@ -1124,7 +1320,7 @@
           "sort": "desc"
         }
       },
-      "id": 18,
+      "id": 20,
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -1133,7 +1329,7 @@
         "h": 7,
         "w": 6,
         "x": 12,
-        "y": 22
+        "y": 29
       }
     },
     {
@@ -1196,7 +1392,7 @@
           "sort": "desc"
         }
       },
-      "id": 19,
+      "id": 21,
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -1205,7 +1401,7 @@
         "h": 7,
         "w": 6,
         "x": 18,
-        "y": 22
+        "y": 29
       }
     }
   ]

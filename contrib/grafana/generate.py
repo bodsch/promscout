@@ -164,9 +164,19 @@ def dashboard(uid, title, desc, ns, b, tags):
         "uid": uid, "title": title, "description": desc, "tags": tags,
         "schemaVersion": 39, "version": 1, "editable": True, "graphTooltip": 1,
         "time": {"from": "now-24h", "to": "now"}, "refresh": "1m", "timezone": "browser",
-        "annotations": {"list": [{"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"},
-                                  "enable": True, "hide": True, "iconColor": "rgba(0, 211, 255, 1)",
-                                  "name": "Annotations & Alerts", "type": "dashboard"}]},
+        "annotations": {"list": [
+            {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+             "enable": True, "hide": True, "iconColor": "rgba(0, 211, 255, 1)",
+             "name": "Annotations & Alerts", "type": "dashboard"},
+            # Marks every cycle that changed the target set on all time series,
+            # so a step in any panel can be matched to the change behind it.
+            # Which host it was is in the log ("target added"/"target removed").
+            {"name": "Target changes", "datasource": DS, "enable": True, "hide": False,
+             "iconColor": "purple", "step": "1m",
+             "expr": f'sum by (instance, change) (increase({ns}_target_changes_total{{instance=~"$instance"}}[2m])) > 0',
+             "titleFormat": "target {{change}}", "textFormat": "{{instance}}",
+             "useValueForTime": False},
+        ]},
         "templating": {"list": [
             {"name": "datasource", "label": "Data source", "type": "datasource", "query": "prometheus",
              "current": {}, "hide": 0, "refresh": 1},
@@ -253,6 +263,23 @@ b.add(ts("Cycle running", [t(f'{ns}_active_discovery{sel}', "{{instance}}")],
          interpolation="stepAfter",
          desc="1 while a cycle runs. Permanently 1 means the cycle never ends — check the "
               "'Last completed cycle' age next to it."), 12, 7)
+b.add(ts("Target changes", [t(f'sum by (change) (increase({ns}_target_changes_total{sel}[$__rate_interval]))',
+                              "{{change}}")],
+         bars=True, stack=True,
+         overrides=[color_override("added", "green"), color_override("removed", "red"),
+                    color_override("changed", "blue")],
+         desc="Targets added to, removed from, or changed in (path, exporter, version) the published set, "
+              "compared with the previous completed cycle — or with the warm-start cache after a restart. "
+              "The first cycle without a cache is the initial set and is not counted. Which host changed is "
+              "in the log: msg=\"target added\" / \"target removed\" / \"target changed\", field `target`. "
+              "A target that is removed and added again repeatedly is flapping: usually an exporter slower "
+              "than `timeout`."), 18, 7)
+b.add(stat("Last target change", [t(f'time() - max({ns}_last_target_change_timestamp{sel} > 0)', instant=True)],
+           "s", mappings=[{"type": "special", "options": {"match": "null",
+                                                          "result": {"text": "none since start", "color": "blue"}}}],
+           steps=[(None, "blue")],
+           desc="Time since the target set last changed on any instance. Informational, not an alert: a "
+                "stable network legitimately goes weeks without a change."), 6, 7)
 
 runtime(b, ns, sel)
 

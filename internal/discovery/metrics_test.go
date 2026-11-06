@@ -37,6 +37,8 @@ func TestSchedulerExposesTheDocumentedMetrics(t *testing.T) {
 		"promscout_targets_valid_total",
 		"promscout_last_discovery_timestamp",
 		"promscout_active_discovery",
+		"promscout_target_changes_total",
+		"promscout_last_target_change_timestamp",
 	} {
 		if !got[name] {
 			t.Errorf("%s is documented and charted but not exposed", name)

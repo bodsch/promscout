@@ -31,6 +31,12 @@ type Scheduler struct {
 	running atomic.Bool
 	ready   atomic.Bool
 
+	// hasBaseline is set once s.targets holds a real previous result — the
+	// warm-start cache or a completed cycle — that a new cycle can be
+	// compared against. Without one, the first cycle is the initial set,
+	// not a set of additions.
+	hasBaseline atomic.Bool
+
 	mu      sync.RWMutex
 	targets []Target
 
@@ -42,6 +48,8 @@ type Scheduler struct {
 	targetsValidTotal      prometheus.Gauge
 	lastDiscoveryTimestamp prometheus.Gauge
 	activeDiscovery        prometheus.Gauge
+	targetChangesTotal     *prometheus.CounterVec
+	lastTargetChange       prometheus.Gauge
 }
 
 // NewScheduler creates a discovery scheduler.
@@ -93,6 +101,7 @@ func NewScheduler(
 			logger.Debug("no target cache loaded", "error", err, "path", cacheFile)
 		} else {
 			s.targets = cached
+			s.hasBaseline.Store(true)
 			logger.Info("loaded targets from cache",
 				"count", len(cached),
 				"path", cacheFile,
@@ -162,6 +171,29 @@ func NewScheduler(
 		},
 	)
 
+	s.targetChangesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "promscout",
+			Name:      "target_changes_total",
+			Help:      "Number of published target changes by kind (added, removed, changed).",
+		},
+		[]string{"change"},
+	)
+	// Initialise every kind so each series exists at 0 from the start: a
+	// CounterVec without observations exports nothing, which a dashboard
+	// cannot tell apart from a missing metric.
+	for _, kind := range AllChangeKinds {
+		s.targetChangesTotal.WithLabelValues(kind)
+	}
+
+	s.lastTargetChange = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "promscout",
+			Name:      "last_target_change_timestamp",
+			Help:      "Unix timestamp of the last cycle that changed the published target set (0 = none yet).",
+		},
+	)
+
 	// Register metrics on the provided registry.
 	reg.MustRegister(
 		s.discoveryRunsTotal,
@@ -171,6 +203,8 @@ func NewScheduler(
 		s.targetsValidTotal,
 		s.lastDiscoveryTimestamp,
 		s.activeDiscovery,
+		s.targetChangesTotal,
+		s.lastTargetChange,
 	)
 
 	return s
@@ -292,8 +326,11 @@ func (s *Scheduler) run(ctx context.Context) {
 	s.targetsDiscoveredTotal.Set(float64(discovered.Load()))
 
 	s.mu.Lock()
+	prev := s.targets
 	s.targets = valid
 	s.mu.Unlock()
+
+	s.recordChanges(prev, valid)
 
 	s.targetsValidTotal.Set(float64(len(valid)))
 	s.lastDiscoveryTimestamp.Set(float64(time.Now().Unix()))
@@ -308,6 +345,48 @@ func (s *Scheduler) run(ctx context.Context) {
 	s.logger.Debug("discovery cycle completed",
 		"discovered_targets", discovered.Load(),
 		"valid_targets", len(valid),
+	)
+}
+
+// recordChanges logs and counts how a newly published target set differs
+// from the previous one.
+//
+// Every added, removed or changed target gets its own info-level line with
+// the address and service metadata, so a target count moving up or down in
+// the dashboard can be traced to a host. Without a baseline (no warm-start
+// cache, first cycle) the set is logged as the initial one instead: counting
+// it as additions would report every known service as "new" on each restart.
+//
+// Parameters:
+//   - prev: the previously published set.
+//   - next: the set being published now.
+func (s *Scheduler) recordChanges(prev, next []Target) {
+	if !s.hasBaseline.Swap(true) {
+		s.logger.Info("initial target set published", "targets", len(next))
+		for _, t := range next {
+			s.logger.Debug("initial target", targetAttrs("initial", t)...)
+		}
+		return
+	}
+
+	changes := diffTargets(prev, next)
+	if len(changes) == 0 {
+		return
+	}
+
+	counts := make(map[string]int, len(AllChangeKinds))
+	for _, c := range changes {
+		counts[c.kind]++
+		s.targetChangesTotal.WithLabelValues(c.kind).Inc()
+		s.logger.Info("target "+c.kind, c.logAttrs()...)
+	}
+	s.lastTargetChange.Set(float64(time.Now().Unix()))
+
+	s.logger.Info("target set changed",
+		"added", counts[ChangeAdded],
+		"removed", counts[ChangeRemoved],
+		"changed", counts[ChangeChanged],
+		"targets", len(next),
 	)
 }
 
